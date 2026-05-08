@@ -7,48 +7,7 @@ struct DashboardView: View {
     @Query private var expenses: [Expense]
     @Query private var payments: [Payment]
 
-    private var monthLabel: String {
-        Date.now.formatted(.dateTime.month(.wide).year())
-    }
-
-    private var monthlyIncome: Double {
-        payments
-            .filter { Calendar.current.isDate($0.date, equalTo: Date.now, toGranularity: .month) }
-            .reduce(0) { $0 + $1.amount }
-    }
-
-    private var monthlyExpenses: Double {
-        expenses
-            .filter { Calendar.current.isDate($0.date, equalTo: Date.now, toGranularity: .month) }
-            .reduce(0) { $0 + $1.amount }
-    }
-
-    private var outstandingInvoices: [(invoice: Invoice, amount: Double)] {
-        invoices.compactMap { invoice in
-            guard !invoice.isPaid else { return nil }
-            let invoiceId = invoice.id
-
-            let total = lineItems
-                .filter { $0.invoice?.id == invoiceId }
-                .reduce(0) { $0 + (Double($1.quantity) * $1.unitPrice) }
-
-            let paid = payments
-                .filter { $0.invoice?.id == invoiceId }
-                .reduce(0) { $0 + $1.amount }
-
-            let outstanding = max(0, total - paid)
-            guard outstanding > 0 else { return nil }
-            return (invoice, outstanding)
-        }
-    }
-
-    private var currencyCode: String {
-        Locale.current.currency?.identifier ?? "USD"
-    }
-
-    private func money(_ value: Double) -> String {
-        value.formatted(.currency(code: currencyCode))
-    }
+    @State private var vm = DashboardViewModel()
 
     var body: some View {
         ScrollView {
@@ -56,97 +15,80 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Dashboard")
                         .font(.largeTitle.bold())
-                    Text(monthLabel)
+                    Text(Date.now.formatted(.dateTime.month(.wide).year()))
                         .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 12) {
-                    metricCard(
-                        title: "Income",
-                        value: money(monthlyIncome),
-                        icon: "arrow.down.left.circle.fill",
-                        iconColor: .green
-                    )
-
-                    metricCard(
-                        title: "Expenses",
-                        value: money(monthlyExpenses),
-                        icon: "arrow.up.right.circle.fill",
-                        iconColor: .orange
-                    )
+                    metricCard(title: "Income", value: vm.monthlyIncome.formattedCurrency, color: .green)
+                    metricCard(title: "Expenses", value: vm.monthlyExpenses.formattedCurrency, color: .orange)
                 }
 
-                netCard
+                metricCard(
+                    title: "Net",
+                    value: vm.monthlyNet.formattedCurrency,
+                    color: vm.monthlyNet >= 0 ? .green : .red
+                )
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("Outstanding Invoices")
                             .font(.title3.bold())
                         Spacer()
-                        Text("\(outstandingInvoices.count)")
-                            .font(.subheadline.weight(.semibold))
+                        Text("\(vm.outstandingRows.count)")
                             .foregroundStyle(.secondary)
                     }
 
-                    if outstandingInvoices.isEmpty {
+                    if vm.outstandingRows.isEmpty {
                         cardContainer {
-                            Text("No outstanding invoices this month.")
+                            Text("No outstanding invoices.")
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        ForEach(outstandingInvoices, id: \.invoice.id) { row in
-                            outstandingRow(invoice: row.invoice, outstanding: row.amount)
+                        ForEach(vm.outstandingRows, id: \.invoice.id) { row in
+                            cardContainer {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(row.invoice.client?.name ?? "Unknown Client")
+                                            .font(.headline)
+                                        Text("Due \(row.invoice.dueDate.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(row.amount.formattedCurrency)
+                                        .font(.headline)
+                                        .foregroundStyle(.red)
+                                }
+                            }
                         }
                     }
                 }
             }
             .padding()
         }
-        .background(Color(.systemGroupedBackground))
+        .onChange(of: invoiceChangeToken)  { recompute() }
+        .onChange(of: lineItemChangeToken) { recompute() }
+        .onChange(of: expenseChangeToken)  { recompute() }
+        .onChange(of: paymentChangeToken)  { recompute() }
+        .onAppear { recompute() }
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private var netCard: some View {
-        let net = monthlyIncome - monthlyExpenses
-        let denominator = max(monthlyIncome, 1)
-        let ratio = min(max(monthlyExpenses / denominator, 0), 1)
-
-        return cardContainer {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Monthly Health")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(money(net))
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                    Text(net >= 0 ? "net positive" : "net negative")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(net >= 0 ? .green : .red)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    ProgressView(value: ratio)
-                        .tint(.purple)
-                    Text("Expense ratio: \(Int(ratio * 100))% of income")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
+    private func recompute() {
+        vm.update(invoices: invoices, lineItems: lineItems,
+                  expenses: expenses, payments: payments)
     }
 
-    private func metricCard(title: String, value: String, icon: String, iconColor: Color) -> some View {
+    private func metricCard(title: String, value: String, color: Color) -> some View {
         cardContainer {
             VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: icon)
-                    .font(.title3)
-                    .foregroundStyle(iconColor)
                 Text(title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(value)
                     .font(.title3.bold())
+                    .foregroundStyle(color)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -154,32 +96,20 @@ struct DashboardView: View {
         }
     }
 
-    private func outstandingRow(invoice: Invoice, outstanding: Double) -> some View {
-        cardContainer {
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.08))
-                    .frame(width: 38, height: 38)
-                    .overlay {
-                        Text(String((invoice.client?.name ?? "U").prefix(1)).uppercased())
-                            .font(.headline.weight(.semibold))
-                    }
+    private var invoiceChangeToken: [String] {
+        invoices.map { "\($0.id.uuidString)|\($0.status.rawValue)|\($0.dueDate.timeIntervalSince1970)" }
+    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(invoice.client?.name ?? "Unknown Client")
-                        .font(.headline)
-                    Text("Due \(invoice.dueDate.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+    private var lineItemChangeToken: [String] {
+        lineItems.map { "\($0.id.uuidString)|\($0.quantity)|\($0.unitPrice)" }
+    }
 
-                Spacer()
+    private var expenseChangeToken: [String] {
+        expenses.map { "\($0.id.uuidString)|\($0.amount)|\($0.date.timeIntervalSince1970)" }
+    }
 
-                Text(money(outstanding))
-                    .font(.headline.bold())
-                    .foregroundStyle(.red)
-            }
-        }
+    private var paymentChangeToken: [String] {
+        payments.map { "\($0.id.uuidString)|\($0.amount)|\($0.date.timeIntervalSince1970)" }
     }
 }
 
@@ -187,7 +117,7 @@ private func cardContainer<Content: View>(@ViewBuilder content: () -> Content) -
     content()
         .padding()
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
 }

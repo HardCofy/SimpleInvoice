@@ -9,6 +9,8 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    @AppStorage("app.themePreference") private var themePreference = "system"
+
     var body: some View {
         TabView {
             NavigationStack {
@@ -19,22 +21,37 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                Text("Invoices coming soon")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .navigationTitle("Invoices")
+                InvoicesView()
             }
             .tabItem {
                 Label("Invoices", systemImage: "doc.text")
             }
 
             NavigationStack {
-                Text("Expenses coming soon")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .navigationTitle("Expenses")
+                ExpensesView()
             }
             .tabItem {
                 Label("Expenses", systemImage: "creditcard")
             }
+
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape")
+            }
+        }
+        .preferredColorScheme(selectedColorScheme)
+    }
+
+    private var selectedColorScheme: ColorScheme? {
+        switch themePreference {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default:
+            return nil
         }
     }
 }
